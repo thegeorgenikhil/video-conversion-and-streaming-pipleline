@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>File Upload</title>
+  </head>
+  <body>
+    <style>
+      video {
+        width: 500px;
+        margin: auto;
+      }
+
+      .file-list p {
+        color: -webkit-link;
+        cursor: pointer;
+        text-decoration: underline;
+      }
+    </style>
+    <div class="video-player">
+      <center>
+        <video controls preload>
+          <source id="video-player" label="1080p" src="" type="video/mp4" />
+        </video>
+      </center>
+      <center>
+        <label>Video Resolution: </label>
+        <select id="quality-picker" class="qualitypick" autocomplete="off">
+          <option selected value="1080p">1080p</option>
+          <option value="720p">720p</option>
+          <option value="480p">480p</option>
+          <option value="360p">360p</option>
+          <option value="240p">240p</option>
+          <option value="144p">144p</option>
+        </select>
+      </center>
+    </div>
+    <div class="file-list" id="file-list">
+      <h1>List of Files Available</h1>
+    </div>
+    <h1>Upload a Large File</h1>
+    <form id="file-upload-form" enctype="multipart/form-data">
+      <input type="file" id="file-input" />
+      <button type="button" id="btn">Upload</button>
+    </form>
+    <br />
+    <div>
+      <label>Upload Progress: </label>
+      <progress id="progress-bar" max="100" value="0"></progress>
+    </div>
+    <br />
+    <fieldset>
+      <legend class="vidcontainer">
+        <label for="eventLog">Video Player Event log:</label>
+      </legend>
+      <div class="event-log">
+        <div readonly class="event-log-contents" id="eventLog"></div>
+      </div>
+    </fieldset>
+
+    <script>
+      const btn = document.getElementById("btn");
+      const qualityPicker = document.getElementById("quality-picker");
+      const fileInput = document.getElementById("file-input");
+      const progressBar = document.getElementById("progress-bar");
+      const video = document.querySelector("video");
+      const eventLog = document.querySelector(".event-log-contents");
+      const fileList = document.getElementById("file-list");
+
+      video.addEventListener("progress", handleEvent);
+
+      let source = null;
+
+      document.addEventListener(
+        "DOMContentLoaded",
+        function () {
+          getFileInfos();
+        },
+        false
+      );
+
+      qualityPicker.addEventListener("change", changeVideoRes);
+      btn.addEventListener("click", uploadFile);
+
+      function handleEvent(event) {
+        eventLog.innerHTML += `<div>${event.type}</div>`;
+      }
+
+      async function changeVideoRes(e) {
+        const selectedValue = e.target.value;
+        const source = video.querySelector("source");
+        const splitUpArr = source.src.split("/");
+        fileName = splitUpArr[splitUpArr.length - 1].split("_");
+        fileName[0] = selectedValue;
+        const updatedSrc = `/videostore/${fileName.join("_")}`;
+
+        const currTime = video.currentTime;
+
+        if (updatedSrc !== source.src) {
+          source.label = selectedValue;
+          source.src = updatedSrc;
+          video.load();
+          video.currentTime = currTime;
+          video.play();
+        }
+      }
+
+      async function playProcessedVideo(id, fileName) {
+        const updatedSrc = `/videostore/1080p_${id}_${fileName}`;
+        const source = video.querySelector("source");
+
+        source.label = "1080p";
+        source.src = updatedSrc;
+        video.load();
+        video.play();
+      }
+
+      async function uploadFile() {
+        const file = fileInput.files[0];
+        const fileName = file.name;
+        const fileId = Date.now();
+        const chunkSize = 1024 * 1024; // 1MB chunks
+        let offset = 0;
+
+        btn.disabled = true; // Disable the upload button during the upload process
+
+        while (offset < file.size) {
+          const chunk = file.slice(offset, offset + chunkSize);
+          const formData = new FormData();
+          formData.append("fileChunk", chunk);
+          formData.append("fileId", fileId);
+          formData.append("fileName", fileName);
+
+          try {
+            const response = await fetch("/upload", {
+              method: "POST",
+              body: formData,
+            });
+
+            if (!response.ok) {
+              throw new Error("Upload failed.");
+            }
+
+            offset += chunkSize;
+            progressBar.value = (offset / file.size) * 100;
+          } catch (error) {
+            console.error(error);
+            btn.disabled = false; // Re-enable the upload button on error
+            return;
+          }
+        }
+
+        btn.disabled = false; // Re-enable the upload button when upload is complete
+
+        await getFileInfos();
+      }
+
+      async function processVideo(fileId) {
+        const formData = new FormData();
+        formData.append("fileId", fileId);
+
+        try {
+          const response = await fetch("/process-video", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error("Upload failed.");
+          }
+
+          await getFileInfos();
+        } catch (error) {
+          console.error(error);
+          return;
+        }
+      }
+
+      async function getFileInfos() {
+        try {
+          const response = await fetch("/file-info");
+
+          if (!response.ok) {
+            throw new Error("Not able to fetch file info");
+          }
+
+          const data = await response.json();
+
+          const fileIds = Object.keys(data);
+
+          const fileInfoFrag = document.createDocumentFragment();
+
+          const totalFiles = document.createElement("span");
+          totalFiles.innerText = `(${fileIds.length} files)`;
+
+          fileIds.forEach((fileId, index) => {
+            const fileName = data[fileId]["file_name"];
+            const isFileProcessed = data[fileId]["is_processed"];
+            const isFileProcessing = data[fileId]["is_processing"];
+
+            const fileInfoParagraph = document.createElement("p");
+            fileInfoParagraph.innerText = `${index + 1}. ${fileName}`;
+
+            if (!isFileProcessed) {
+              if (!isFileProcessing) {
+                fileInfoParagraph.innerHTML +=
+                  " <i>(Not Processed)</i> - Click to start processing";
+                fileInfoParagraph.onclick = () => processVideo(fileId);
+              } else {
+                fileInfoParagraph.innerHTML +=
+                  " <i>(Currently Being Processed) - Please wait</i>";
+              }
+            } else {
+              fileInfoParagraph.innerHTML +=
+                " <i>(Processed)</i> - Click to view the video";
+              fileInfoParagraph.onclick = () =>
+                playProcessedVideo(fileId, fileName);
+            }
+            fileInfoFrag.append(fileInfoParagraph);
+          });
+
+          fileList.innerHTML = "<h1>List of Files Available</h1>";
+          fileList.append(fileInfoFrag);
+        } catch (error) {
+          console.error(error);
+          return;
+        }
+      }
+    </script>
+  </body>
+</html>
